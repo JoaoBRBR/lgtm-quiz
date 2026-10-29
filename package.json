@@ -1,0 +1,25 @@
+{
+  "name": "lgtm-quiz",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Make developers prove they understand AI-generated code before committing",
+  "bin": {
+    "lgtm-quiz": "dist/quiz.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc && node scripts/copy-ui.mjs",
+    "prepare": "npm run build",
+    "spike": "node --experimental-strip-types src/spike.ts",
+    "quiz": "node --experimental-strip-types src/quiz.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
+  }
+}
