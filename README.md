@@ -170,10 +170,13 @@ This is an early version. Be aware that:
 ```bash
 git clone https://github.com/JoaoBRBR/lgtm-quiz.git
 cd lgtm-quiz
-npm install      # also builds
+npm install      # dev dependencies (TypeScript)
 npm link         # makes the lgtm-quiz command point at this folder
 npm run build    # rebuild after changing src/
 ```
+
+The compiled `dist/` folder is committed on purpose: it lets `npm install -g github:...` work without a build step,
+so run `npm run build` and commit `dist/` together with your source changes.
 
 The design notes are in [`SPEC.md`](SPEC.md).
 

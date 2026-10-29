@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LGTM Quiz</title>
+  <style>
+    :root {
+      --bg: #f6f7f9; --panel: #ffffff; --text: #1c2026; --muted: #5d6673; --border: #d9dde3;
+      --accent: #3b6ef5; --good: #1f8a4c; --good-bg: #e4f5ea; --bad: #c0392b; --bad-bg: #fbe8e5;
+      --add-bg: #e6f6ea; --del-bg: #fcebe9; --hunk: #8a94a3;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #14171c; --panel: #1d2127; --text: #e6e9ee; --muted: #98a2b1; --border: #343a43;
+        --accent: #6b93ff; --good: #4cc17e; --good-bg: #17301f; --bad: #ee7b6e; --bad-bg: #3a1d1a;
+        --add-bg: #172a1e; --del-bg: #33201e; --hunk: #7b8594;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+    header { display: flex; justify-content: space-between; align-items: center; padding: 14px 24px; border-bottom: 1px solid var(--border); }
+    header h1 { font-size: 16px; margin: 0; }
+    .progress { color: var(--muted); font-size: 14px; }
+    main { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 16px; padding: 16px 24px; height: calc(100vh - 56px); }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: auto; }
+    .code-title { padding: 10px 14px; border-bottom: 1px solid var(--border); font: 13px ui-monospace, monospace; color: var(--muted); position: sticky; top: 0; background: var(--panel); }
+    pre { margin: 0; font: 13px/1.55 ui-monospace, SFMono-Regular, monospace; }
+    pre span { display: block; padding: 0 14px; white-space: pre-wrap; word-break: break-word; }
+    .add { background: var(--add-bg); } .del { background: var(--del-bg); } .hunk { color: var(--hunk); }
+    .question { padding: 20px; }
+    .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+    .tag { font-size: 12px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--border); color: var(--muted); }
+    .scenario { color: var(--muted); border-left: 3px solid var(--border); padding-left: 12px; margin: 0 0 14px; }
+    .prompt { font-weight: 600; margin: 0 0 16px; }
+    .option { display: block; width: 100%; text-align: left; margin: 0 0 8px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; cursor: pointer; }
+    .option:hover:enabled { border-color: var(--accent); }
+    .option:disabled { cursor: default; }
+    .option.right { border-color: var(--good); background: var(--good-bg); }
+    .option.wrong { border-color: var(--bad); background: var(--bad-bg); }
+    .idk { margin: 4px 0 0; padding: 8px 14px; border: 1px dashed var(--border); border-radius: 8px; background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
+    .idk:hover:enabled { border-color: var(--accent); color: var(--text); }
+    .idk:disabled { opacity: .5; cursor: default; }
+    .teach { margin: 14px 0; padding: 14px; border-radius: 8px; border: 1px solid var(--accent); background: var(--bg); }
+    .teach h3 { margin: 0 0 6px; font-size: 14px; color: var(--accent); }
+    .followup { margin-top: 18px; }
+    .followup h3 { margin: 0 0 8px; font-size: 14px; }
+    .waiting { color: var(--muted); margin: 14px 0; }
+    .error { color: var(--bad); margin: 14px 0; }
+    .explanation { margin: 14px 0; padding: 12px 14px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); }
+    .verdict { font-weight: 700; margin-bottom: 4px; }
+    .verdict.good { color: var(--good); } .verdict.bad { color: var(--bad); }
+    .next { padding: 9px 18px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+    .center { max-width: 520px; margin: 12vh auto; text-align: center; padding: 0 24px; }
+    .score { font-size: 56px; font-weight: 700; margin: 8px 0; }
+    .passed { color: var(--good); } .failed { color: var(--bad); }
+    .nocode { padding: 20px; color: var(--muted); }
+    @media (max-width: 800px) { main { grid-template-columns: 1fr; height: auto; } }
+  </style>
+</head>
+<body>
+  <header><h1>LGTM Quiz</h1><span class="progress" id="progress"></span></header>
+  <div id="app"></div>
+
+  <script>
+    const token = new URLSearchParams(location.search).get('t');
+    const api = (path, options) => fetch(`${path}?t=${token}`, options).then((r) => r.json());
+    const app = document.getElementById('app');
+    const progress = document.getElementById('progress');
+    let questions = [];
+    let current = 0;
+    let passRate = 0.7;
+    let strings = {};
+
+    const t = (key, vars = {}) => strings[key].replace(/\{(\w+)\}/g, (_, name) => vars[name] ?? '');
+
+    function el(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    function renderCode(code) {
+      const panel = el('div', 'panel');
+      if (!code) {
+        panel.append(el('div', 'nocode', t('noCode')));
+        return panel;
+      }
+      panel.append(el('div', 'code-title', code.file));
+      const pre = el('pre');
+      code.text.split('\n').forEach((line) => {
+        const kind = line.startsWith('@@') ? 'hunk' : line.startsWith('+') ? 'add' : line.startsWith('-') ? 'del' : '';
+        pre.append(el('span', kind, line || ' '));
+      });
+      panel.append(pre);
+      return panel;
+    }
+
+    function renderQuestion() {
+      const q = questions[current];
+      progress.textContent = t('progress', { n: current + 1, total: questions.length });
+      app.replaceChildren();
+
+      const main = el('main');
+      const box = el('div', 'panel question');
+
+      const tags = el('div', 'tags');
+      [t('level', { n: q.level }), ...q.concepts].forEach((t) => tags.append(el('span', 'tag', t)));
+      box.append(tags, el('p', 'scenario', q.scenario), el('p', 'prompt', q.question));
+
+      const feedback = el('div');
+      const idkButton = el('button', 'idk', t('idk'));
+      const buttons = q.options.map((text, index) => {
+        const button = el('button', 'option', `${'ABCD'[index]}.  ${text}`);
+        button.addEventListener('click', () => answer(q, index, buttons, idkButton, feedback));
+        return button;
+      });
+      idkButton.addEventListener('click', () => dontKnow(q, buttons, idkButton, feedback));
+      box.append(...buttons, idkButton, feedback);
+
+      main.append(renderCode(q.code), box);
+      app.append(main);
+    }
+
+    function nextButton() {
+      const last = current === questions.length - 1;
+      const next = el('button', 'next', t(last ? 'seeResult' : 'nextQuestion'));
+      next.addEventListener('click', () => { last ? renderResult() : (current++, renderQuestion()); });
+      return next;
+    }
+
+    function verdictNote(correct, text) {
+      const note = el('div', 'explanation');
+      note.append(el('div', `verdict ${correct ? 'good' : 'bad'}`, t(correct ? 'correct' : 'notQuite')), el('div', '', text));
+      return note;
+    }
+
+    async function dontKnow(q, buttons, idkButton, feedback) {
+      buttons.forEach((b) => (b.disabled = true));
+      idkButton.disabled = true;
+      feedback.replaceChildren(el('div', 'waiting', t('preparing')));
+
+      const res = await api('/api/idk', { method: 'POST', body: JSON.stringify({ id: q.id }) });
+      if (res.error) {
+        buttons.forEach((b) => (b.disabled = false));
+        idkButton.disabled = false;
+        feedback.replaceChildren(el('div', 'error', t('explainError', { reason: res.error })));
+        return;
+      }
+
+      const teach = el('div', 'teach');
+      teach.append(el('h3', '', t('letMeExplain')), el('div', '', res.explanation));
+
+      const follow = el('div', 'followup');
+      follow.append(el('h3', '', t('checkLearned')), el('p', 'scenario', res.followUp.scenario), el('p', 'prompt', res.followUp.question));
+      const result = el('div');
+      const followButtons = res.followUp.options.map((text, index) => {
+        const button = el('button', 'option', `${'ABCD'[index]}.  ${text}`);
+        button.addEventListener('click', () => answerFollowUp(q, index, followButtons, result));
+        return button;
+      });
+      follow.append(...followButtons, result);
+      feedback.replaceChildren(teach, follow);
+    }
+
+    async function answerFollowUp(q, choice, followButtons, result) {
+      followButtons.forEach((b) => (b.disabled = true));
+      const res = await api('/api/followup', { method: 'POST', body: JSON.stringify({ id: q.id, choice }) });
+      followButtons[res.answerIndex].classList.add('right');
+      if (!res.correct) followButtons[choice].classList.add('wrong');
+      result.append(verdictNote(res.correct, res.explanation), nextButton());
+    }
+
+    async function answer(q, choice, buttons, idkButton, feedback) {
+      buttons.forEach((b) => (b.disabled = true));
+      idkButton.disabled = true;
+      const res = await api('/api/answer', { method: 'POST', body: JSON.stringify({ id: q.id, choice }) });
+      buttons[res.answerIndex].classList.add('right');
+      if (!res.correct) buttons[choice].classList.add('wrong');
+
+      feedback.append(verdictNote(res.correct, res.explanation), nextButton());
+    }
+
+    async function renderResult() {
+      const r = await api('/api/result');
+      progress.textContent = t('done');
+      app.replaceChildren();
+      const box = el('div', 'center');
+      box.append(
+        el('div', '', t('correctCount', { correct: r.correct, total: r.total })),
+        el('div', `score ${r.passed ? 'passed' : 'failed'}`, `${r.percent}%`),
+        el('p', '', r.idk ? t('helpSummary', { idk: r.idk, learned: r.learned }) : ''),
+        el('p', '', t(r.passed ? 'passed' : 'failed', { rate: Math.round(passRate * 100) })),
+      );
+      const close = el('button', 'next', t('finish'));
+      close.addEventListener('click', async () => {
+        await api('/api/done', { method: 'POST' });
+        box.replaceChildren(el('p', '', t('closeTab')));
+      });
+      box.append(close);
+      app.append(box);
+    }
+
+    api('/api/session').then((session) => {
+      questions = session.questions;
+      passRate = session.passRate;
+      strings = session.strings;
+      renderQuestion();
+    });
+  </script>
+</body>
+</html>

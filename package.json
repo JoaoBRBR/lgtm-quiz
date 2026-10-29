@@ -14,7 +14,6 @@
   },
   "scripts": {
     "build": "tsc && node scripts/copy-ui.mjs",
-    "prepare": "npm run build",
     "spike": "node --experimental-strip-types src/spike.ts",
     "quiz": "node --experimental-strip-types src/quiz.ts"
   },
