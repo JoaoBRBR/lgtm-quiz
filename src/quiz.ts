@@ -21,6 +21,7 @@ import {
   type Question,
   type Teaching,
 } from './questions.ts';
+import { alreadyPassed, markPassed, runHookCommand, stagedHash } from './hook.ts';
 import { getStrings } from './strings.ts';
 
 const HOST = '127.0.0.1';
@@ -29,6 +30,7 @@ const DEFAULT_PASS_RATE = 0.7;
 const DEFAULT_LEVELS: Level[] = [1, 2];
 const PERCENT = 100;
 const EXIT_DELAY_MS = 300;
+const HOOK_TIMEOUT_MS = 30 * 60 * 1000;
 const CONFIG_FILE = `${homedir()}/.config/lgtm-quiz/config.json`;
 const CACHE_FILE = `${homedir()}/.cache/lgtm-quiz/last-questions.json`;
 const PAGE_FILE = new URL('./ui/index.html', import.meta.url);
@@ -39,6 +41,7 @@ interface Config {
   levels: Level[];
   questions: number;
   language: string;
+  validate: boolean;
 }
 
 interface Answer {
@@ -50,6 +53,7 @@ interface Answer {
 }
 
 const USAGE = `Usage: lgtm-quiz [options]
+       lgtm-quiz hook on | off | status
 
 Quizzes you on the changes of the current branch against a base branch (default: main).
 
@@ -58,7 +62,9 @@ Quizzes you on the changes of the current branch against a base branch (default:
   --levels <list>    question levels, e.g. 1,2,3 (default: 1,2)
   --questions <n>    maximum number of questions (default: ${DEFAULT_QUESTIONS})
   --lang <language>  language of questions and interface, e.g. pt-BR, es, "French" (default: ${DEFAULT_LANGUAGE})
+  --no-validate      skip the check that drops guessable questions (faster, cheaper)
   --pass <0-1>       pass rate (default: 0.7)
+  --hook             used by the git hook: staged changes, blocks the commit when you fail
   -h, --help         show this help
 
 Personal defaults can be set in ${CONFIG_FILE}, globally or per repository:
@@ -81,6 +87,7 @@ function loadConfig(): Config {
     levels: DEFAULT_LEVELS,
     questions: DEFAULT_QUESTIONS,
     language: DEFAULT_LANGUAGE,
+    validate: true,
   };
   if (!existsSync(CONFIG_FILE)) return defaults;
 
@@ -129,7 +136,12 @@ async function loadSession(config: Config, staged: boolean): Promise<{ questions
   }
 
   console.log(`Generating up to ${config.questions} questions (levels ${config.levels.join(', ')})...`);
-  const questions = await generateQuestions(diff, config.levels, config.questions, config.language);
+  const questions = await generateQuestions(diff, {
+    levels: config.levels,
+    count: config.questions,
+    language: config.language,
+    validate: config.validate,
+  });
   mkdirSync(dirname(CACHE_FILE), { recursive: true });
   writeFileSync(CACHE_FILE, JSON.stringify({ questions, diff }));
   return { questions, diff };
@@ -195,16 +207,19 @@ function json(res: ServerResponse, data: unknown, status = 200) {
   res.end(JSON.stringify(data));
 }
 
-const { values: flags } = parseArgs({
+const { values: flags, positionals } = parseArgs({
   options: {
     base: { type: 'string' },
     staged: { type: 'boolean', default: false },
     levels: { type: 'string' },
     questions: { type: 'string' },
     lang: { type: 'string' },
+    'no-validate': { type: 'boolean', default: false },
     pass: { type: 'string' },
+    hook: { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
   },
+  allowPositionals: true,
 });
 
 if (flags.help) {
@@ -212,10 +227,21 @@ if (flags.help) {
   process.exit(0);
 }
 
+if (positionals[0] === 'hook') {
+  try {
+    console.log(runHookCommand(positionals[1], repoRoot(process.cwd())));
+    process.exit(0);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  }
+}
+
 const config = loadConfig();
 if (flags.base) config.base = flags.base;
 if (flags.levels) config.levels = parseLevels(flags.levels);
 if (flags.lang) config.language = flags.lang;
+if (flags['no-validate']) config.validate = false;
 if (flags.questions) config.questions = Number(flags.questions);
 if (!Number.isInteger(config.questions) || config.questions < 1) {
   throw new Error(`Invalid number of questions "${config.questions}". Use a whole number of 1 or more.`);
@@ -223,12 +249,39 @@ if (!Number.isInteger(config.questions) || config.questions < 1) {
 if (flags.pass) config.passRate = Number(flags.pass);
 if (process.env.LGTM_PASS_RATE) config.passRate = Number(process.env.LGTM_PASS_RATE);
 
-const { questions, diff } = await loadSession(config, flags.staged);
+const hookRepo = flags.hook ? repoRoot(process.cwd()) : '';
+let hookHash = '';
+if (flags.hook) {
+  if (process.env.LGTM_SKIP) process.exit(0);
+  hookHash = stagedHash(hookRepo);
+  if (alreadyPassed(hookRepo, hookHash)) {
+    console.log('lgtm-quiz: you already passed the quiz for these exact changes.');
+    process.exit(0);
+  }
+}
+
+async function prepare() {
+  const session = await loadSession(config, flags.staged);
+  return { ...session, strings: session.questions.length ? await getStrings(config.language) : {} };
+}
+
+// A hook must never lock you out of committing because the tool itself failed.
+const { questions, diff, strings } = await prepare().catch((error) => {
+  if (!flags.hook) throw error;
+  console.error('lgtm-quiz could not run, so the commit is not blocked:', error instanceof Error ? error.message : error);
+  process.exit(0);
+});
 if (!questions.length) {
   console.log('No meaningful changes to ask about. Nothing to prove.');
   process.exit(0);
 }
-const strings = await getStrings(config.language);
+if (flags.hook) {
+  console.log('lgtm-quiz: answer the quiz in your browser to continue the commit (Ctrl+C cancels it).');
+  setTimeout(() => {
+    console.error('lgtm-quiz: timed out waiting for the quiz, commit cancelled.');
+    process.exit(1);
+  }, HOOK_TIMEOUT_MS).unref();
+}
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${HOST}`);
@@ -290,6 +343,7 @@ const server = createServer(async (req, res) => {
     json(res, result(questions.length, config.passRate));
   } else if (req.method === 'POST' && url.pathname === '/api/done') {
     const outcome = result(questions.length, config.passRate);
+    if (outcome.passed && flags.hook) markPassed(hookRepo, hookHash);
     json(res, outcome);
     setTimeout(() => process.exit(outcome.passed ? 0 : 1), EXIT_DELAY_MS);
   } else {

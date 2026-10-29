@@ -15,7 +15,8 @@
   "scripts": {
     "build": "tsc && node scripts/copy-ui.mjs",
     "spike": "node --experimental-strip-types src/spike.ts",
-    "quiz": "node --experimental-strip-types src/quiz.ts"
+    "quiz": "node --experimental-strip-types src/quiz.ts",
+    "test": "node --experimental-strip-types --test \"tests/*.test.ts\""
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

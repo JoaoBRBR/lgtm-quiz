@@ -1,4 +1,4 @@
-import { ALL_LEVELS, branchDiff, generateQuestions, resolveBranch } from './questions.ts';
+import { branchDiff, generateQuestions, resolveBranch } from './questions.ts';
 
 const [repo, base = 'main'] = process.argv.slice(2);
 if (!repo) {
@@ -8,7 +8,7 @@ if (!repo) {
 const diff = branchDiff(repo, resolveBranch(repo, base));
 if (!diff.trim()) throw new Error('Empty diff');
 
-const questions = await generateQuestions(diff, ALL_LEVELS);
+const questions = await generateQuestions(diff);
 if (!questions.length) console.log('No meaningful hunks: no questions generated.');
 questions.forEach((q, i) => {
   console.log(`\n#${i + 1} L${q.level} [${q.concepts.join(', ')}] ${q.hunk}`);

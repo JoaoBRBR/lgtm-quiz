@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname } from 'node:path';
-import { ask, DEFAULT_LANGUAGE, parseJson } from './questions.ts';
+import { ask, parseJson } from './llm.ts';
+import { DEFAULT_LANGUAGE } from './questions.ts';
 
 export const EN_STRINGS = {
   progress: 'Question {n} of {total}',

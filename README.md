@@ -47,6 +47,11 @@ Press **I don't know** and you get a short lesson tied to that code, then a new 
   3. **Architecture**: what else does this change affect?
 - **"I don't know" is allowed.** Press the button and it explains the concept in plain words, tied to your code,
   then asks a fresh question to check you got it.
+- **Guessable questions are filtered out.** A second pass tries to answer each question *without seeing your code*.
+  If it can, the question was too easy or too generic, and it's dropped. That means a small change can end up
+  with only one or two questions, which is on purpose.
+- **Big changes still get good questions.** On a large branch, the riskiest hunks are chosen (logic, auth, state,
+  services) while lockfiles, generated files, imports and log lines are skipped.
 - **In your language.** English by default; set `--lang` to quiz yourself in Portuguese, Spanish, German and more.
 - **Local and private.** The quiz runs on your machine (`127.0.0.1`, one-time token). The answer key stays on
   the server until you answer.
@@ -105,6 +110,7 @@ The command exits with code `0` if you pass and `1` if you don't, so you can als
 | `lgtm-quiz --levels 1,2,3` | Which question levels to use (default `1,2`) |
 | `lgtm-quiz --questions 8` | Maximum number of questions (default `5`) |
 | `lgtm-quiz --lang pt-BR` | Language of the questions and the interface (default `en`) |
+| `lgtm-quiz --no-validate` | Skip the check that drops guessable questions (faster and cheaper) |
 | `lgtm-quiz --pass 0.8` | Pass line from 0 to 1 (default `0.7`, i.e. 70%) |
 | `lgtm-quiz --help` | Show all options |
 
@@ -114,6 +120,28 @@ The interface text is translated the first time you use a language and then save
 
 If you run it while you're on the base branch itself, it falls back to your staged changes.
 Trivial changes (log removals, formatting, version bumps) are skipped, so a small diff can have only one or two questions.
+
+## Quiz before every commit (optional)
+
+Prefer it automatic? Turn on the commit hook, **in the repos where you want it**:
+
+```bash
+lgtm-quiz hook on       # from inside the repo
+lgtm-quiz hook off      # remove it again
+lgtm-quiz hook status
+```
+
+After that, `git commit` opens the quiz on what you staged, and the commit only goes through if you pass.
+If you fail, your changes stay staged and nothing is lost: read the code and commit again for fresh questions.
+
+- **Nothing is committed to the repo.** The hook lives inside `.git`. With Husky it creates a local
+  `.husky/pre-commit` that is excluded through `.git/info/exclude`, so your teammates never see it.
+- **It never overwrites a hook you already have.** If one exists, it tells you the line to add yourself.
+- **It never locks you out.** If the quiz itself can't run (no `claude`, no network), the commit goes through
+  with a warning.
+- **Passing once is enough.** If a commit is retried with exactly the same staged changes, you aren't quizzed twice.
+- **Skip it when you must:** `git commit --no-verify`, or `LGTM_SKIP=1 git commit`.
+- If you stop answering, the commit is cancelled after 30 minutes.
 
 ## Settings per repository
 
@@ -134,7 +162,7 @@ overrides them for one repository (use its full path):
 
 Priority, strongest first: **command-line flags**, then the **`repos` entry**, then the **top-level values**, then the built-in defaults.
 
-Available settings: `base`, `levels`, `questions`, `passRate` and `language`.
+Available settings: `base`, `levels`, `questions`, `passRate`, `language` and `validate`.
 
 Nothing is ever written into your repositories. The last generated questions and translated interface texts are
 cached in `~/.cache/lgtm-quiz/`.
@@ -148,7 +176,8 @@ cached in `~/.cache/lgtm-quiz/`.
 | The browser doesn't open | Copy the `http://127.0.0.1:...` link from the terminal into your browser. |
 | `Branch "main" not found` | Your base branch has another name. Use `--base <name>` or set it in the config. |
 | `No changes to ask about` | The branch has no changes against the base. Make a change, or use `--staged`. |
-| Questions seem to ignore parts of a big branch | Very large diffs are cut at about 60,000 characters, so only the first files are used. Quiz on smaller pieces with `--staged`. |
+| A commit seems stuck | The hook is waiting for you to finish the quiz. Look for the browser tab, or press Ctrl+C to cancel. |
+| Fewer questions than expected | Trivial changes are skipped and guessable questions are dropped. Use `--no-validate` to keep them. |
 
 ## Current limits
 
@@ -157,15 +186,14 @@ This is an early version. Be aware that:
 - The AI can write a bad question. Some are too easy, and the right answer is sometimes the longest one. Please open an issue when you see one.
 - Only multiple-choice questions exist for now. Written answers and "explain this function in your own words" are planned.
 - It doesn't remember what you know yet, so you can be asked about the same basics again.
-- It isn't hooked into `git commit`. You run it yourself.
 
 ## Roadmap
 
-- [ ] A second check that filters out guessable or ambiguous questions
-- [ ] Smarter selection of the riskiest changes on big branches
+- [x] A second check that filters out guessable questions
+- [x] Smarter selection of the riskiest changes on big branches
 - [ ] Written and "explain it" questions, and later voice answers
 - [ ] A personal profile, so concepts you already know get asked less
-- [ ] Optional `git commit` hook, opt-in per repository
+- [x] Optional `git commit` hook, opt-in per repository
 - [ ] Other AI backends besides Claude Code (Codex, Gemini, local models)
 
 ## Development
@@ -176,6 +204,7 @@ cd lgtm-quiz
 npm install      # dev dependencies (TypeScript)
 npm link         # makes the lgtm-quiz command point at this folder
 npm run build    # rebuild after changing src/
+npm test         # run the tests
 ```
 
 The compiled `dist/` folder is committed on purpose: it lets `npm install -g github:...` work without a build step,
