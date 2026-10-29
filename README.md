@@ -62,8 +62,10 @@ You need:
 Then, one command:
 
 ```bash
-npm install -g github:JoaoBRBR/lgtm-quiz
+npm install -g --install-links=true github:JoaoBRBR/lgtm-quiz
 ```
+
+(The `--install-links=true` part matters: without it, npm 10 installs an empty link instead of the tool.)
 
 Check that it worked:
 
@@ -141,6 +143,7 @@ cached in `~/.cache/lgtm-quiz/`.
 
 | Problem | What to do |
 | --- | --- |
+| `lgtm-quiz: command not found` right after installing | You probably left out `--install-links=true`. Run `npm uninstall -g lgtm-quiz`, then install again with the full command above. |
 | `claude: command not found` | Install Claude Code and log in, then try again. |
 | The browser doesn't open | Copy the `http://127.0.0.1:...` link from the terminal into your browser. |
 | `Branch "main" not found` | Your base branch has another name. Use `--base <name>` or set it in the config. |
