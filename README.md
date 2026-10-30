@@ -47,6 +47,8 @@ Press **I don't know** and you get a short lesson tied to that code, then a new 
   3. **Architecture**: what else does this change affect?
 - **"I don't know" is allowed.** Press the button and it explains the concept in plain words, tied to your code,
   then asks a fresh question to check you got it.
+- **It learns what you know.** Every answer updates a small personal profile. Basics you keep getting right stop
+  coming up, and concepts you miss or press "I don't know" on come back until they stick.
 - **Guessable questions are filtered out.** A second pass tries to answer each question *without seeing your code*.
   If it can, the question was too easy or too generic, and it's dropped. That means a small change can end up
   with only one or two questions, which is on purpose.
@@ -111,6 +113,7 @@ The command exits with code `0` if you pass and `1` if you don't, so you can als
 | `lgtm-quiz --questions 8` | Maximum number of questions (default `5`) |
 | `lgtm-quiz --lang pt-BR` | Language of the questions and the interface (default `en`) |
 | `lgtm-quiz --no-validate` | Skip the check that drops guessable questions (faster and cheaper) |
+| `lgtm-quiz --no-adaptive` | Don't use or update your knowledge profile for this run |
 | `lgtm-quiz --pass 0.8` | Pass line from 0 to 1 (default `0.7`, i.e. 70%) |
 | `lgtm-quiz --help` | Show all options |
 
@@ -120,6 +123,29 @@ The interface text is translated the first time you use a language and then save
 
 If you run it while you're on the base branch itself, it falls back to your staged changes.
 Trivial changes (log removals, formatting, version bumps) are skipped, so a small diff can have only one or two questions.
+
+## It learns what you know
+
+Each question is tagged with the concepts it tests (`array.map`, `promise.async`, `angular.signals`...). Your
+answers move a confidence score for each concept:
+
+- Right answers raise it. Wrong answers and "I don't know" lower it. Learning something through the lesson
+  counts for a little less than knowing it already.
+- Confidence **fades with time** (it halves after about 60 days), so something you knew last year gets asked again.
+- Once a concept is solid, the basic "what does this do?" questions about it **stop appearing**. Questions about
+  *this specific change* never fully fade, because understanding a construct isn't the same as understanding
+  what your AI did with it here.
+- A mastered basic still shows up now and then, so a lucky streak can't switch a topic off for good.
+
+```bash
+lgtm-quiz profile          # what you know, weakest first
+lgtm-quiz profile reset    # start over
+lgtm-quiz --no-adaptive    # skip it for one run
+```
+
+The profile is a plain JSON file at `~/.config/lgtm-quiz/profile.json`. It stays on your machine and is never sent
+anywhere, except that the names of your mastered and shaky concepts are included in the prompt so the AI can pick
+better questions.
 
 ## Quiz before every commit (optional)
 
@@ -162,7 +188,7 @@ overrides them for one repository (use its full path):
 
 Priority, strongest first: **command-line flags**, then the **`repos` entry**, then the **top-level values**, then the built-in defaults.
 
-Available settings: `base`, `levels`, `questions`, `passRate`, `language` and `validate`.
+Available settings: `base`, `levels`, `questions`, `passRate`, `language`, `validate` and `adaptive`.
 
 Nothing is ever written into your repositories. The last generated questions and translated interface texts are
 cached in `~/.cache/lgtm-quiz/`.
@@ -185,14 +211,14 @@ This is an early version. Be aware that:
 
 - The AI can write a bad question. Some are too easy, and the right answer is sometimes the longest one. Please open an issue when you see one.
 - Only multiple-choice questions exist for now. Written answers and "explain this function in your own words" are planned.
-- It doesn't remember what you know yet, so you can be asked about the same basics again.
+- The profile only knows what you answer here. Concepts you know but haven't been asked about yet start at zero.
 
 ## Roadmap
 
 - [x] A second check that filters out guessable questions
 - [x] Smarter selection of the riskiest changes on big branches
 - [ ] Written and "explain it" questions, and later voice answers
-- [ ] A personal profile, so concepts you already know get asked less
+- [x] A personal profile, so concepts you already know get asked less
 - [x] Optional `git commit` hook, opt-in per repository
 - [ ] Other AI backends besides Claude Code (Codex, Gemini, local models)
 

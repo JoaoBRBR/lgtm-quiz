@@ -22,6 +22,15 @@ import {
   type Teaching,
 } from './questions.ts';
 import { alreadyPassed, markPassed, runHookCommand, stagedHash } from './hook.ts';
+import {
+  describeProfile,
+  loadProfile,
+  profilePath,
+  recordOutcome,
+  resetProfile,
+  saveProfile,
+  type Outcome,
+} from './profile.ts';
 import { getStrings } from './strings.ts';
 
 const HOST = '127.0.0.1';
@@ -42,6 +51,7 @@ interface Config {
   questions: number;
   language: string;
   validate: boolean;
+  adaptive: boolean;
 }
 
 interface Answer {
@@ -54,6 +64,7 @@ interface Answer {
 
 const USAGE = `Usage: lgtm-quiz [options]
        lgtm-quiz hook on | off | status
+       lgtm-quiz profile [reset]
 
 Quizzes you on the changes of the current branch against a base branch (default: main).
 
@@ -63,6 +74,7 @@ Quizzes you on the changes of the current branch against a base branch (default:
   --questions <n>    maximum number of questions (default: ${DEFAULT_QUESTIONS})
   --lang <language>  language of questions and interface, e.g. pt-BR, es, "French" (default: ${DEFAULT_LANGUAGE})
   --no-validate      skip the check that drops guessable questions (faster, cheaper)
+  --no-adaptive      ignore and do not update your personal knowledge profile
   --pass <0-1>       pass rate (default: 0.7)
   --hook             used by the git hook: staged changes, blocks the commit when you fail
   -h, --help         show this help
@@ -88,6 +100,7 @@ function loadConfig(): Config {
     questions: DEFAULT_QUESTIONS,
     language: DEFAULT_LANGUAGE,
     validate: true,
+    adaptive: true,
   };
   if (!existsSync(CONFIG_FILE)) return defaults;
 
@@ -141,6 +154,7 @@ async function loadSession(config: Config, staged: boolean): Promise<{ questions
     count: config.questions,
     language: config.language,
     validate: config.validate,
+    profile: config.adaptive ? profile : undefined,
   });
   mkdirSync(dirname(CACHE_FILE), { recursive: true });
   writeFileSync(CACHE_FILE, JSON.stringify({ questions, diff }));
@@ -215,6 +229,7 @@ const { values: flags, positionals } = parseArgs({
     questions: { type: 'string' },
     lang: { type: 'string' },
     'no-validate': { type: 'boolean', default: false },
+    'no-adaptive': { type: 'boolean', default: false },
     pass: { type: 'string' },
     hook: { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
@@ -224,6 +239,17 @@ const { values: flags, positionals } = parseArgs({
 
 if (flags.help) {
   console.log(USAGE);
+  process.exit(0);
+}
+
+if (positionals[0] === 'profile') {
+  if (positionals[1] === 'reset') {
+    resetProfile();
+    console.log('Profile cleared.');
+  } else {
+    console.log(describeProfile(loadProfile()));
+    console.log(`\n(${profilePath()})`);
+  }
   process.exit(0);
 }
 
@@ -242,12 +268,23 @@ if (flags.base) config.base = flags.base;
 if (flags.levels) config.levels = parseLevels(flags.levels);
 if (flags.lang) config.language = flags.lang;
 if (flags['no-validate']) config.validate = false;
+if (flags['no-adaptive']) config.adaptive = false;
 if (flags.questions) config.questions = Number(flags.questions);
 if (!Number.isInteger(config.questions) || config.questions < 1) {
   throw new Error(`Invalid number of questions "${config.questions}". Use a whole number of 1 or more.`);
 }
 if (flags.pass) config.passRate = Number(flags.pass);
 if (process.env.LGTM_PASS_RATE) config.passRate = Number(process.env.LGTM_PASS_RATE);
+
+// Test runs on cached questions must never write to the real profile.
+const recording = config.adaptive && !(process.env.LGTM_QUESTIONS && !process.env.LGTM_PROFILE);
+const profile = loadProfile();
+
+function learn(q: Question, outcome: Outcome) {
+  if (!recording) return;
+  recordOutcome(profile, q.concepts, outcome);
+  saveProfile(profile);
+}
 
 const hookRepo = flags.hook ? repoRoot(process.cwd()) : '';
 let hookHash = '';
@@ -299,7 +336,8 @@ const server = createServer(async (req, res) => {
     const q = questions.find((item) => item.id === id);
     if (!q) return json(res, { error: 'unknown question' }, 404);
 
-    const answer = answers.get(id) ?? {
+    const existing = answers.get(id);
+    const answer = existing ?? {
       choice,
       correct: choice === q.answerIndex,
       idk: false,
@@ -307,6 +345,7 @@ const server = createServer(async (req, res) => {
       followUpDone: false,
     };
     answers.set(id, answer);
+    if (!existing) learn(q, answer.correct ? 'correct' : 'wrong');
     json(res, { correct: answer.correct, answerIndex: q.answerIndex, explanation: q.explanation });
   } else if (req.method === 'POST' && url.pathname === '/api/idk') {
     const { id } = JSON.parse(await readBody(req));
@@ -317,6 +356,7 @@ const server = createServer(async (req, res) => {
     try {
       const teaching = teachings.get(id) ?? (await teach(q, hunkFor(diff, q.hunk)?.text ?? '', config.language));
       teachings.set(id, teaching);
+      if (!answers.get(id)?.idk) learn(q, 'idk');
       answers.set(id, { choice: -1, correct: false, idk: true, learned: false, followUpDone: false });
       json(res, { explanation: teaching.explanation, followUp: publicQuestion(teaching.followUp, diff) });
     } catch (error) {
@@ -333,6 +373,8 @@ const server = createServer(async (req, res) => {
       answer.followUpDone = true;
       answer.learned = choice === teaching.followUp.answerIndex;
       answer.correct = answer.learned;
+      const original = questions.find((item) => item.id === id);
+      if (answer.learned && original) learn(original, 'learned');
     }
     json(res, {
       correct: answer.learned,

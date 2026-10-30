@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { selectHunks } from './diff.ts';
 import { ask, parseJson } from './llm.ts';
 import { balanceOptions, lengthOutlier } from './balance.ts';
+import { hasData, hintFor, selectQuestions, type Profile } from './profile.ts';
 import { dropGuessable } from './validate.ts';
 
 export type Level = 1 | 2 | 3;
@@ -76,7 +77,7 @@ Keep code, identifiers, file paths and concept tags exactly as they are.
 `;
 }
 
-function questionsPrompt(levels: Level[], count: number, language: string): string {
+function questionsPrompt(levels: Level[], count: number, language: string, profileHint: string): string {
   return `You are checking whether a developer understands code they are about to commit.
 Below is a git diff. Write up to ${count} multiple-choice questions, one per MEANINGFUL hunk.
 
@@ -87,7 +88,7 @@ Only use these levels, and spread the questions across ALL of them whenever the 
 ${levels.map((l) => `- ${LEVEL_DESCRIPTIONS[l]}`).join('\n')}
 
 ${QUESTION_RULES}
-${languageRule(language)}
+${languageRule(language)}${profileHint}
 Reply with ONLY a JSON array, no prose, no code fences. Each item:
 ${QUESTION_SHAPE}
 
@@ -183,26 +184,35 @@ export interface GenerateOptions {
   count?: number;
   language?: string;
   validate?: boolean;
+  profile?: Profile;
 }
 
 export async function generateQuestions(diff: string, options: GenerateOptions = {}): Promise<Question[]> {
-  const { levels = ALL_LEVELS, count = DEFAULT_QUESTIONS, language = DEFAULT_LANGUAGE, validate = true } = options;
+  const { levels = ALL_LEVELS, count = DEFAULT_QUESTIONS, language = DEFAULT_LANGUAGE, validate = true, profile } = options;
+  const adaptive = !!profile && hasData(profile);
 
   const selection = selectHunks(diff, MAX_DIFF_CHARS);
   if (selection.keptHunks < selection.totalHunks) {
     console.log(`Large change: using the ${selection.keptHunks} riskiest of ${selection.totalHunks} hunks.`);
   }
 
-  const wanted = validate ? count * CANDIDATE_FACTOR : count;
-  const raw = await ask(questionsPrompt(levels, wanted, language) + selection.text);
+  const wanted = validate || adaptive ? count * CANDIDATE_FACTOR : count;
+  const raw = await ask(questionsPrompt(levels, wanted, language, adaptive ? hintFor(profile!) : '') + selection.text);
   const generated = parseJson<RawQuestion[]>(raw, '[', ']').slice(0, wanted);
   const candidates = (await Promise.all(generated.map((q) => balanceOptions(q)))).map(build);
-  if (!validate || !candidates.length) return candidates.slice(0, count);
+  if (!candidates.length) return [];
 
-  console.log(`Checking ${candidates.length} questions for guessable ones...`);
-  const { kept, dropped } = await dropGuessable(candidates, count);
-  if (dropped) console.log(`Dropped ${dropped} question${dropped > 1 ? 's' : ''} that could be answered without the code.`);
-  return kept;
+  let pool = candidates;
+  if (validate) {
+    console.log(`Checking ${candidates.length} questions for guessable ones...`);
+    const { kept, dropped } = await dropGuessable(candidates, candidates.length);
+    if (dropped) console.log(`Dropped ${dropped} question${dropped > 1 ? 's' : ''} that could be answered without the code.`);
+    pool = kept;
+  }
+
+  const { selected, skippedKnown } = selectQuestions(pool, count, adaptive ? profile! : { version: 1, concepts: {} });
+  if (skippedKnown) console.log(`Skipped ${skippedKnown} basic question${skippedKnown > 1 ? 's' : ''} on things you already know well.`);
+  return selected;
 }
 
 export async function teach(q: Question, hunkText: string, language = DEFAULT_LANGUAGE): Promise<Teaching> {
